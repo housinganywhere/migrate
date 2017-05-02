@@ -5,10 +5,10 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"github.com/housinganywhere/migrate/driver"
+	"github.com/housinganywhere/migrate/file"
+	"github.com/housinganywhere/migrate/migrate/direction"
 	"github.com/jmcvetta/neoism"
-	"github.com/mattes/migrate/driver"
-	"github.com/mattes/migrate/file"
-	"github.com/mattes/migrate/migrate/direction"
 	"strings"
 )
 

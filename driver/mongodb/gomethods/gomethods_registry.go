@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/mattes/migrate/driver"
+	"github.com/housinganywhere/migrate/driver"
 )
 
 var methodsReceiversMu sync.Mutex

@@ -3,12 +3,12 @@ package example
 import (
 	"time"
 
-	"github.com/mattes/migrate/driver/mongodb/gomethods"
-	_ "github.com/mattes/migrate/driver/mongodb/gomethods"
+	"github.com/housinganywhere/migrate/driver/mongodb/gomethods"
+	_ "github.com/housinganywhere/migrate/driver/mongodb/gomethods"
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
 
-	"github.com/mattes/migrate/driver/mongodb"
+	"github.com/housinganywhere/migrate/driver/mongodb"
 )
 
 type SampleMongoDbMigrator struct {

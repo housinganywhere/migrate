@@ -3,17 +3,17 @@ package example
 import (
 	"testing"
 
-	"github.com/mattes/migrate/file"
-	"github.com/mattes/migrate/migrate/direction"
+	"github.com/housinganywhere/migrate/file"
+	"github.com/housinganywhere/migrate/migrate/direction"
 
 	"os"
 	"reflect"
 	"time"
 
-	"github.com/mattes/migrate/driver"
-	"github.com/mattes/migrate/driver/mongodb"
-	"github.com/mattes/migrate/driver/mongodb/gomethods"
-	pipep "github.com/mattes/migrate/pipe"
+	"github.com/housinganywhere/migrate/driver"
+	"github.com/housinganywhere/migrate/driver/mongodb"
+	"github.com/housinganywhere/migrate/driver/mongodb/gomethods"
+	pipep "github.com/housinganywhere/migrate/pipe"
 )
 
 type ExpectedMigrationResult struct {
