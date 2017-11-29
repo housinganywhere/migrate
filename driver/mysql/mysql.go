@@ -52,11 +52,7 @@ func (driver *Driver) Close() error {
 }
 
 func (driver *Driver) ensureVersionTableExists() error {
-	_, err := driver.db.Exec("CREATE TABLE IF NOT EXISTS " + tableName + " (version int not null primary key);")
-
-	if _, isWarn := err.(mysql.MySQLWarnings); err != nil && !isWarn {
-		return err
-	}
+	driver.db.Exec("CREATE TABLE IF NOT EXISTS " + tableName + " (version int not null primary key);")
 
 	return nil
 }
