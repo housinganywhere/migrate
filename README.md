@@ -1,6 +1,11 @@
 # You are looking at a deprecated version.
-# Use the [latest version](https://github.com/housinganywhere/migrate) instead.
+# Use the [latest version](https://github.com/golang-migrate/migrate) instead.
 
+## How to build a static binary for Linux from MacOS:
+```bash
+brew install FiloSottile/musl-cross/musl-cross
+CC=x86_64-linux-musl-gcc CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -o migrate.linux_amd64 -ldflags "-linkmode external -extldflags -static -s -w" -a
+```
 ---
 
 # migrate

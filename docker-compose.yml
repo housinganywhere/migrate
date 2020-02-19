@@ -1,5 +1,5 @@
 go: &go
-  image: golang
+  image: golang:alpine3.11
   working_dir: /go/src/github.com/housinganywhere/migrate
   volumes:
     - $GOPATH:/go
