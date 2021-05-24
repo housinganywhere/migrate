@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"go/token"
+	"io/fs"
 	"io/ioutil"
 	"path"
 	"regexp"
@@ -15,6 +16,17 @@ import (
 
 	"github.com/housinganywhere/migrate/migrate/direction"
 )
+
+type Filesystem interface {
+	ReadDir(name string) ([]fs.DirEntry, error)
+	ReadFile(name string) ([]byte, error)
+}
+
+var fileSystemCustom Filesystem
+
+func SetFilesystem(newfileSystem Filesystem) {
+	fileSystemCustom = newfileSystem
+}
 
 var filenameRegex = `^([0-9]+)_(.*)\.(up|down)\.%s$`
 
@@ -67,7 +79,15 @@ type MigrationFiles []MigrationFile
 // ReadContent reads the file's content if the content is empty
 func (f *File) ReadContent() error {
 	if len(f.Content) == 0 {
-		content, err := ioutil.ReadFile(path.Join(f.Path, f.FileName))
+		var (
+			content []byte
+			err     error
+		)
+		if fileSystemCustom != nil {
+			content, err = fileSystemCustom.ReadFile(path.Join(f.Path, f.FileName))
+		} else {
+			content, err = ioutil.ReadFile(path.Join(f.Path, f.FileName))
+		}
 		if err != nil {
 			return err
 		}
@@ -152,8 +172,34 @@ func (mf *MigrationFiles) From(version uint64, relativeN int) (Files, error) {
 
 // ReadMigrationFiles reads all migration files from a given path
 func ReadMigrationFiles(path string, filenameRegex *regexp.Regexp) (files MigrationFiles, err error) {
+	var ioFiles []fs.FileInfo
+
+	if fileSystemCustom != nil {
+		dirEntries, err := fileSystemCustom.ReadDir(path)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, e := range dirEntries {
+			if e.IsDir() {
+				continue
+			}
+
+			info, err := e.Info()
+			if err != nil {
+				return nil, err
+			}
+
+			ioFiles = append(ioFiles, info)
+		}
+	} else {
+		ioFiles, err = ioutil.ReadDir(path)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	// find all migration files in path
-	ioFiles, err := ioutil.ReadDir(path)
 	if err != nil {
 		return nil, err
 	}
