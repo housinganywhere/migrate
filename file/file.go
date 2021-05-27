@@ -170,11 +170,14 @@ func (mf *MigrationFiles) From(version uint64, relativeN int) (Files, error) {
 	return files, nil
 }
 
-// ReadMigrationFiles reads all migration files from a given path
-func ReadMigrationFiles(path string, filenameRegex *regexp.Regexp) (files MigrationFiles, err error) {
-	var ioFiles []fs.FileInfo
+func readFromFilesystem(path string) (ioFiles []fs.FileInfo, err error) {
+	if fileSystemCustom == nil {
+		ioFiles, err = ioutil.ReadDir(path)
+		if err != nil {
+			return nil, err
+		}
 
-	if fileSystemCustom != nil {
+	} else {
 		dirEntries, err := fileSystemCustom.ReadDir(path)
 		if err != nil {
 			return nil, err
@@ -192,14 +195,15 @@ func ReadMigrationFiles(path string, filenameRegex *regexp.Regexp) (files Migrat
 
 			ioFiles = append(ioFiles, info)
 		}
-	} else {
-		ioFiles, err = ioutil.ReadDir(path)
-		if err != nil {
-			return nil, err
-		}
 	}
 
+	return ioFiles, err
+}
+
+// ReadMigrationFiles reads all migration files from a given path
+func ReadMigrationFiles(path string, filenameRegex *regexp.Regexp) (files MigrationFiles, err error) {
 	// find all migration files in path
+	ioFiles, err := readFromFilesystem(path)
 	if err != nil {
 		return nil, err
 	}
