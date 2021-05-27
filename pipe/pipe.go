@@ -2,8 +2,13 @@
 package pipe
 
 import (
+	"fmt"
 	"os"
 	"os/signal"
+
+	"github.com/fatih/color"
+	"github.com/housinganywhere/migrate/file"
+	"github.com/housinganywhere/migrate/migrate/direction"
 )
 
 // New creates a new pipe. A pipe is basically a channel.
@@ -80,4 +85,44 @@ func stopNotifyInterruptChannel(interruptChannel chan os.Signal) {
 	if interruptChannel != nil {
 		signal.Stop(interruptChannel)
 	}
+}
+
+func WritePipe(pipe chan interface{}) (ok bool) {
+	okFlag := true
+	if pipe != nil {
+		for {
+			select {
+			case item, more := <-pipe:
+				if !more {
+					return okFlag
+				}
+				switch item.(type) {
+
+				case string:
+					fmt.Println(item.(string))
+
+				case error:
+					c := color.New(color.FgRed)
+					c.Printf("%s\n\n", item.(error).Error())
+					okFlag = false
+
+				case file.File:
+					f := item.(file.File)
+					if f.Direction == direction.Up {
+						c := color.New(color.FgGreen)
+						c.Print(">")
+					} else if f.Direction == direction.Down {
+						c := color.New(color.FgRed)
+						c.Print("<")
+					}
+					fmt.Printf(" %s\n", f.FileName)
+
+				default:
+					text := fmt.Sprint(item)
+					fmt.Println(text)
+				}
+			}
+		}
+	}
+	return okFlag
 }

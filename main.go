@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/fatih/color"
 	_ "github.com/housinganywhere/migrate/driver/bash"
 	_ "github.com/housinganywhere/migrate/driver/cassandra"
 	_ "github.com/housinganywhere/migrate/driver/crate"
@@ -20,9 +19,7 @@ import (
 	_ "github.com/housinganywhere/migrate/driver/postgres"
 	_ "github.com/housinganywhere/migrate/driver/ql"
 	_ "github.com/housinganywhere/migrate/driver/sqlite3"
-	"github.com/housinganywhere/migrate/file"
 	"github.com/housinganywhere/migrate/migrate"
-	"github.com/housinganywhere/migrate/migrate/direction"
 	pipep "github.com/housinganywhere/migrate/pipe"
 )
 
@@ -76,7 +73,7 @@ func main() {
 		timerStart = time.Now()
 		pipe := pipep.New()
 		go migrate.Migrate(pipe, *url, *migrationsPath, relativeNInt)
-		ok := writePipe(pipe)
+		ok := pipep.WritePipe(pipe)
 		printTimer()
 		if !ok {
 			os.Exit(1)
@@ -102,7 +99,7 @@ func main() {
 		timerStart = time.Now()
 		pipe := pipep.New()
 		go migrate.Migrate(pipe, *url, *migrationsPath, relativeNInt)
-		ok := writePipe(pipe)
+		ok := pipep.WritePipe(pipe)
 		printTimer()
 		if !ok {
 			os.Exit(1)
@@ -113,7 +110,7 @@ func main() {
 		timerStart = time.Now()
 		pipe := pipep.New()
 		go migrate.Up(pipe, *url, *migrationsPath)
-		ok := writePipe(pipe)
+		ok := pipep.WritePipe(pipe)
 		printTimer()
 		if !ok {
 			os.Exit(1)
@@ -124,7 +121,7 @@ func main() {
 		timerStart = time.Now()
 		pipe := pipep.New()
 		go migrate.Down(pipe, *url, *migrationsPath)
-		ok := writePipe(pipe)
+		ok := pipep.WritePipe(pipe)
 		printTimer()
 		if !ok {
 			os.Exit(1)
@@ -135,7 +132,7 @@ func main() {
 		timerStart = time.Now()
 		pipe := pipep.New()
 		go migrate.Redo(pipe, *url, *migrationsPath)
-		ok := writePipe(pipe)
+		ok := pipep.WritePipe(pipe)
 		printTimer()
 		if !ok {
 			os.Exit(1)
@@ -146,7 +143,7 @@ func main() {
 		timerStart = time.Now()
 		pipe := pipep.New()
 		go migrate.Reset(pipe, *url, *migrationsPath)
-		ok := writePipe(pipe)
+		ok := pipep.WritePipe(pipe)
 		printTimer()
 		if !ok {
 			os.Exit(1)
@@ -167,46 +164,6 @@ func main() {
 	case "help":
 		helpCmd()
 	}
-}
-
-func writePipe(pipe chan interface{}) (ok bool) {
-	okFlag := true
-	if pipe != nil {
-		for {
-			select {
-			case item, more := <-pipe:
-				if !more {
-					return okFlag
-				}
-				switch item.(type) {
-
-				case string:
-					fmt.Println(item.(string))
-
-				case error:
-					c := color.New(color.FgRed)
-					c.Printf("%s\n\n", item.(error).Error())
-					okFlag = false
-
-				case file.File:
-					f := item.(file.File)
-					if f.Direction == direction.Up {
-						c := color.New(color.FgGreen)
-						c.Print(">")
-					} else if f.Direction == direction.Down {
-						c := color.New(color.FgRed)
-						c.Print("<")
-					}
-					fmt.Printf(" %s\n", f.FileName)
-
-				default:
-					text := fmt.Sprint(item)
-					fmt.Println(text)
-				}
-			}
-		}
-	}
-	return okFlag
 }
 
 func verifyMigrationsPath(path string) {

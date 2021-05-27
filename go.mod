@@ -1,6 +1,6 @@
 module github.com/housinganywhere/migrate
 
-go 1.13
+go 1.16
 
 require (
 	github.com/cznic/ql v1.2.0

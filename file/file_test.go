@@ -6,6 +6,7 @@ import (
 	"path"
 	"testing"
 
+	"github.com/housinganywhere/migrate/file/testdata"
 	"github.com/housinganywhere/migrate/migrate/direction"
 )
 
@@ -55,15 +56,9 @@ func TestParseFilenameSchema(t *testing.T) {
 	}
 }
 
-func TestFiles(t *testing.T) {
-	tmpdir, err := ioutil.TempDir("/tmp", "TestLookForMigrationFilesInSearchPath")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(tmpdir)
-
-	if err = ioutil.WriteFile(path.Join(tmpdir, "nonsense.txt"), nil, 0755); err != nil {
-		t.Fatal("Unable to write files in tmpdir", err)
+func prepareDisk(tmpdir string) error {
+	if err := ioutil.WriteFile(path.Join(tmpdir, "nonsense.txt"), nil, 0755); err != nil {
+		return err
 	}
 	ioutil.WriteFile(path.Join(tmpdir, "002_migrationfile.up.sql"), nil, 0755)
 	ioutil.WriteFile(path.Join(tmpdir, "002_migrationfile.down.sql"), nil, 0755)
@@ -78,138 +73,162 @@ func TestFiles(t *testing.T) {
 
 	ioutil.WriteFile(path.Join(tmpdir, "401_migrationfile.down.sql"), []byte("test"), 0755)
 
-	files, err := ReadMigrationFiles(tmpdir, FilenameRegex("sql"))
+	return nil
+}
+func TestFiles(t *testing.T) {
+	tmpdir, err := ioutil.TempDir("/tmp", "TestLookForMigrationFilesInSearchPath")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpdir)
+
+	err = prepareDisk(tmpdir)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if len(files) == 0 {
-		t.Fatal("No files returned.")
-	}
+	t.Run("disk files", checkFiles(tmpdir))
 
-	if len(files) != 5 {
-		t.Fatal("Wrong number of files returned.")
-	}
+	SetFilesystem(testdata.MigrationsFiles)
 
-	// test sort order
-	if files[0].Version != 1 || files[1].Version != 2 || files[2].Version != 101 || files[3].Version != 301 || files[4].Version != 401 {
-		t.Error("Sort order is incorrect")
-		t.Error(files)
-	}
+	t.Run("embedded files", checkFiles("."))
+}
 
-	// test UpFile and DownFile
-	if files[0].UpFile == nil {
-		t.Fatalf("Missing up file for version %v", files[0].Version)
-	}
-	if files[0].DownFile == nil {
-		t.Fatalf("Missing down file for version %v", files[0].Version)
-	}
-
-	if files[1].UpFile == nil {
-		t.Fatalf("Missing up file for version %v", files[1].Version)
-	}
-	if files[1].DownFile == nil {
-		t.Fatalf("Missing down file for version %v", files[1].Version)
-	}
-
-	if files[2].UpFile == nil {
-		t.Fatalf("Missing up file for version %v", files[2].Version)
-	}
-	if files[2].DownFile == nil {
-		t.Fatalf("Missing down file for version %v", files[2].Version)
-	}
-
-	if files[3].UpFile == nil {
-		t.Fatalf("Missing up file for version %v", files[3].Version)
-	}
-	if files[3].DownFile != nil {
-		t.Fatalf("There should not be a down file for version %v", files[3].Version)
-	}
-
-	if files[4].UpFile != nil {
-		t.Fatalf("There should not be a up file for version %v", files[4].Version)
-	}
-	if files[4].DownFile == nil {
-		t.Fatalf("Missing down file for version %v", files[4].Version)
-	}
-
-	// test read
-	if err = files[4].DownFile.ReadContent(); err != nil {
-		t.Error("Unable to read file", err)
-	}
-	if files[4].DownFile.Content == nil {
-		t.Fatal("Read content is nil")
-	}
-	if string(files[4].DownFile.Content) != "test" {
-		t.Fatal("Read content is wrong")
-	}
-
-	// test names
-	if files[0].UpFile.Name != "migrationfile" {
-		t.Error("file name is not correct", files[0].UpFile.Name)
-	}
-	if files[0].UpFile.FileName != "001_migrationfile.up.sql" {
-		t.Error("file name is not correct", files[0].UpFile.FileName)
-	}
-
-	// test file.From()
-	// there should be the following versions:
-	// 1(up&down), 2(up&down), 101(up&down), 301(up), 401(down)
-	var tests = []struct {
-		from        uint64
-		relative    int
-		expectRange []uint64
-	}{
-		{0, 2, []uint64{1, 2}},
-		{1, 4, []uint64{2, 101, 301}},
-		{1, 0, nil},
-		{0, 1, []uint64{1}},
-		{0, 0, nil},
-		{101, -2, []uint64{101, 2}},
-		{401, -1, []uint64{401}},
-	}
-
-	for _, test := range tests {
-		var rangeFiles Files
-		rangeFiles, err = files.From(test.from, test.relative)
+func checkFiles(path string) func(t *testing.T) {
+	return func(t *testing.T) {
+		files, err := ReadMigrationFiles(path, FilenameRegex("sql"))
+		// files, err := ReadMigrationFiles(tmpdir, FilenameRegex("sql"))
 		if err != nil {
-			t.Error("Unable to fetch range:", err)
-		}
-		if len(rangeFiles) != len(test.expectRange) {
-			t.Fatalf("file.From(): expected %v files, got %v. For test %v.", len(test.expectRange), len(rangeFiles), test.expectRange)
+			t.Fatal(err)
 		}
 
-		for i, version := range test.expectRange {
-			if rangeFiles[i].Version != version {
-				t.Fatal("file.From(): returned files dont match expectations", test.expectRange)
+		if len(files) == 0 {
+			t.Fatal("No files returned.")
+		}
+
+		if len(files) != 5 {
+			t.Fatal("Wrong number of files returned.")
+		}
+
+		// test sort order
+		if files[0].Version != 1 || files[1].Version != 2 || files[2].Version != 101 || files[3].Version != 301 || files[4].Version != 401 {
+			t.Error("Sort order is incorrect")
+			t.Error(files)
+		}
+
+		// test UpFile and DownFile
+		if files[0].UpFile == nil {
+			t.Fatalf("Missing up file for version %v", files[0].Version)
+		}
+		if files[0].DownFile == nil {
+			t.Fatalf("Missing down file for version %v", files[0].Version)
+		}
+
+		if files[1].UpFile == nil {
+			t.Fatalf("Missing up file for version %v", files[1].Version)
+		}
+		if files[1].DownFile == nil {
+			t.Fatalf("Missing down file for version %v", files[1].Version)
+		}
+
+		if files[2].UpFile == nil {
+			t.Fatalf("Missing up file for version %v", files[2].Version)
+		}
+		if files[2].DownFile == nil {
+			t.Fatalf("Missing down file for version %v", files[2].Version)
+		}
+
+		if files[3].UpFile == nil {
+			t.Fatalf("Missing up file for version %v", files[3].Version)
+		}
+		if files[3].DownFile != nil {
+			t.Fatalf("There should not be a down file for version %v", files[3].Version)
+		}
+
+		if files[4].UpFile != nil {
+			t.Fatalf("There should not be a up file for version %v", files[4].Version)
+		}
+		if files[4].DownFile == nil {
+			t.Fatalf("Missing down file for version %v", files[4].Version)
+		}
+
+		// test read
+		if err = files[4].DownFile.ReadContent(); err != nil {
+			t.Error("Unable to read file", err)
+		}
+		if files[4].DownFile.Content == nil {
+			t.Fatal("Read content is nil")
+		}
+		if string(files[4].DownFile.Content) != "test" {
+			t.Fatal("Read content is wrong")
+		}
+
+		// test names
+		if files[0].UpFile.Name != "migrationfile" {
+			t.Error("file name is not correct", files[0].UpFile.Name)
+		}
+		if files[0].UpFile.FileName != "001_migrationfile.up.sql" {
+			t.Error("file name is not correct", files[0].UpFile.FileName)
+		}
+
+		// test file.From()
+		// there should be the following versions:
+		// 1(up&down), 2(up&down), 101(up&down), 301(up), 401(down)
+		var tests = []struct {
+			from        uint64
+			relative    int
+			expectRange []uint64
+		}{
+			{0, 2, []uint64{1, 2}},
+			{1, 4, []uint64{2, 101, 301}},
+			{1, 0, nil},
+			{0, 1, []uint64{1}},
+			{0, 0, nil},
+			{101, -2, []uint64{101, 2}},
+			{401, -1, []uint64{401}},
+		}
+
+		for _, test := range tests {
+			var rangeFiles Files
+			rangeFiles, err = files.From(test.from, test.relative)
+			if err != nil {
+				t.Error("Unable to fetch range:", err)
+			}
+			if len(rangeFiles) != len(test.expectRange) {
+				t.Fatalf("file.From(): expected %v files, got %v. For test %v.", len(test.expectRange), len(rangeFiles), test.expectRange)
+			}
+
+			for i, version := range test.expectRange {
+				if rangeFiles[i].Version != version {
+					t.Fatal("file.From(): returned files dont match expectations", test.expectRange)
+				}
 			}
 		}
-	}
 
-	// test ToFirstFrom
-	tffFiles, err := files.ToFirstFrom(401)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(tffFiles) != 4 {
-		t.Fatalf("Wrong number of files returned by ToFirstFrom(), expected %v, got %v.", 5, len(tffFiles))
-	}
-	if tffFiles[0].Direction != direction.Down {
-		t.Error("ToFirstFrom() did not return DownFiles")
-	}
+		// test ToFirstFrom
+		tffFiles, err := files.ToFirstFrom(401)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(tffFiles) != 4 {
+			t.Fatalf("Wrong number of files returned by ToFirstFrom(), expected %v, got %v.", 5, len(tffFiles))
+		}
+		if tffFiles[0].Direction != direction.Down {
+			t.Error("ToFirstFrom() did not return DownFiles")
+		}
 
-	// test ToLastFrom
-	tofFiles, err := files.ToLastFrom(0)
-	if err != nil {
-		t.Fatal(err)
+		// test ToLastFrom
+		tofFiles, err := files.ToLastFrom(0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(tofFiles) != 4 {
+			t.Fatalf("Wrong number of files returned by ToLastFrom(), expected %v, got %v.", 5, len(tofFiles))
+		}
+		if tofFiles[0].Direction != direction.Up {
+			t.Error("ToFirstFrom() did not return UpFiles")
+		}
 	}
-	if len(tofFiles) != 4 {
-		t.Fatalf("Wrong number of files returned by ToLastFrom(), expected %v, got %v.", 5, len(tofFiles))
-	}
-	if tofFiles[0].Direction != direction.Up {
-		t.Error("ToFirstFrom() did not return UpFiles")
-	}
-
 }
 
 func TestDuplicateFiles(t *testing.T) {
