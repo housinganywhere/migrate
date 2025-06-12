@@ -272,3 +272,31 @@ func makeFiles(testname string, names ...string) (root string, cleanup func(), e
 	}
 	return
 }
+
+func TestReadMigrationFilesWithZip(t *testing.T) {
+	// Test reading migration files from both zip and directory
+	files, err := ReadMigrationFilesWithZip("testdata", FilenameRegex("sql"))
+	if err != nil {
+		t.Fatal("Error reading migration files with zip:", err)
+	}
+
+	// Should find files from both the zip (version 500) and directory files
+	found500 := false
+	for _, f := range files {
+		if f.Version == 500 {
+			found500 = true
+			if f.UpFile == nil || f.DownFile == nil {
+				t.Error("Version 500 should have both up and down files from zip")
+			}
+		}
+	}
+
+	if !found500 {
+		t.Error("Should have found migration files from zip archive (version 500)")
+	}
+
+	// Verify we still get all the regular files too
+	if len(files) < 5 { // At least the original 5 files plus the zip files
+		t.Errorf("Expected at least 6 migration files (5 from directory + 1 from zip), got %d", len(files))
+	}
+}

@@ -288,7 +288,7 @@ func initDriverAndReadMigrationFilesAndGetVersion(url, migrationsPath string) (d
 	if err != nil {
 		return nil, nil, 0, err
 	}
-	files, err := file.ReadMigrationFiles(migrationsPath, file.FilenameRegex(d.FilenameExtension()))
+	files, err := file.ReadMigrationFilesWithZip(migrationsPath, file.FilenameRegex(d.FilenameExtension()))
 	if err != nil {
 		d.Close() // TODO what happens with errors from this func?
 		return nil, nil, 0, err

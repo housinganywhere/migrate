@@ -2,6 +2,7 @@
 package file
 
 import (
+	"archive/zip"
 	"bytes"
 	"errors"
 	"fmt"
@@ -124,12 +125,12 @@ func (mf *MigrationFiles) ToLastFrom(version uint64) (Files, error) {
 
 // From travels relatively through migration files.
 //
-// 		+1 will fetch the next up migration file
-// 		+2 will fetch the next two up migration files
-// 		+n will fetch ...
-// 		-1 will fetch the the previous down migration file
-// 		-2 will fetch the next two previous down migration files
-//		-n will fetch ...
+//	+1 will fetch the next up migration file
+//	+2 will fetch the next two up migration files
+//	+n will fetch ...
+//	-1 will fetch the the previous down migration file
+//	-2 will fetch the next two previous down migration files
+//	-n will fetch ...
 func (mf *MigrationFiles) From(version uint64, relativeN int) (Files, error) {
 	var d direction.Direction
 	if relativeN > 0 {
@@ -200,18 +201,109 @@ func readFromFilesystem(path string) (ioFiles []fs.FileInfo, err error) {
 	return ioFiles, err
 }
 
+// ReadMigrationFilesFromZip reads migration files from zip and sql files
+func ReadMigrationFilesFromZip(zipPath string, filenameRegex *regexp.Regexp) (files MigrationFiles, err error) {
+	var zipData []byte
+	if fileSystemCustom != nil {
+		zipData, err = fileSystemCustom.ReadFile(zipPath)
+	} else {
+		zipData, err = ioutil.ReadFile(zipPath)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	zipReader, err := zip.NewReader(bytes.NewReader(zipData), int64(len(zipData)))
+	if err != nil {
+		return nil, err
+	}
+
+	tmpFiles := make([]*tmpFile, 0)
+	tmpFileMap := map[uint64]map[direction.Direction]tmpFile{}
+
+	for _, file := range zipReader.File {
+		if file.FileInfo().IsDir() {
+			continue
+		}
+
+		version, name, d, err := parseFilenameSchema(file.Name, filenameRegex)
+		if err == nil {
+			if _, ok := tmpFileMap[version]; !ok {
+				tmpFileMap[version] = map[direction.Direction]tmpFile{}
+			}
+			if existing, ok := tmpFileMap[version][d]; !ok {
+				rc, err := file.Open()
+				if err != nil {
+					return nil, err
+				}
+				content, err := ioutil.ReadAll(rc)
+				rc.Close()
+				if err != nil {
+					return nil, err
+				}
+
+				tmpFileMap[version][d] = tmpFile{version: version, name: name, filename: file.Name, content: content, d: d}
+				tmpFiles = append(tmpFiles, &tmpFile{version, name, file.Name, content, d})
+			} else {
+				return nil, fmt.Errorf("duplicate migration file version %d : %q and %q", version, existing.filename, file.Name)
+			}
+		}
+	}
+
+	return buildMigrationFiles(tmpFiles, "")
+}
+
+// ReadMigrationFilesWithZip reads migration files from both zip archives and directory
+// It first reads from any zip file found in the directory, then reads from SQL files
+func ReadMigrationFilesWithZip(dirPath string, filenameRegex *regexp.Regexp) (files MigrationFiles, err error) {
+	var allFiles MigrationFiles
+
+	// First, check for zip files in the directory
+	ioFiles, err := readFromFilesystem(dirPath)
+	if err != nil {
+		return nil, err
+	}
+
+	// Look for zip files and read migration files from them first
+	for _, file := range ioFiles {
+		if !file.IsDir() && strings.HasSuffix(strings.ToLower(file.Name()), ".zip") {
+			zipPath := path.Join(dirPath, file.Name())
+			zipFiles, err := ReadMigrationFilesFromZip(zipPath, filenameRegex)
+			if err != nil {
+				return nil, fmt.Errorf("error reading zip file %s: %v", file.Name(), err)
+			}
+			allFiles = append(allFiles, zipFiles...)
+		}
+	}
+
+	// Then read regular migration files from the directory
+	regularFiles, err := ReadMigrationFiles(dirPath, filenameRegex)
+	if err != nil {
+		return nil, err
+	}
+
+	// Combine and sort all files
+	allFiles = append(allFiles, regularFiles...)
+	sort.Sort(allFiles)
+
+	// Check for version conflicts between zip and regular files
+	versionMap := make(map[uint64]bool)
+	for _, file := range allFiles {
+		if _, exists := versionMap[file.Version]; exists {
+			return nil, fmt.Errorf("duplicate migration version %d found in both zip and directory files", file.Version)
+		}
+		versionMap[file.Version] = true
+	}
+
+	return allFiles, nil
+}
+
 // ReadMigrationFiles reads all migration files from a given path
 func ReadMigrationFiles(path string, filenameRegex *regexp.Regexp) (files MigrationFiles, err error) {
 	// find all migration files in path
 	ioFiles, err := readFromFilesystem(path)
 	if err != nil {
 		return nil, err
-	}
-	type tmpFile struct {
-		version  uint64
-		name     string
-		filename string
-		d        direction.Direction
 	}
 	tmpFiles := make([]*tmpFile, 0)
 	tmpFileMap := map[uint64]map[direction.Direction]tmpFile{}
@@ -222,15 +314,29 @@ func ReadMigrationFiles(path string, filenameRegex *regexp.Regexp) (files Migrat
 				tmpFileMap[version] = map[direction.Direction]tmpFile{}
 			}
 			if existing, ok := tmpFileMap[version][d]; !ok {
-				tmpFileMap[version][d] = tmpFile{version: version, name: name, filename: file.Name(), d: d}
+				tmpFileMap[version][d] = tmpFile{version: version, name: name, filename: file.Name(), content: nil, d: d}
 			} else {
 				return nil, fmt.Errorf("duplicate migration file version %d : %q and %q", version, existing.filename, file.Name())
 			}
-			tmpFiles = append(tmpFiles, &tmpFile{version, name, file.Name(), d})
+			tmpFiles = append(tmpFiles, &tmpFile{version, name, file.Name(), nil, d})
 		}
 	}
 
-	// put tmpFiles into MigrationFile struct
+	return buildMigrationFiles(tmpFiles, path)
+}
+
+// tmpFile represents a temporary file structure used during migration file processing
+type tmpFile struct {
+	version  uint64
+	name     string
+	filename string
+	content  []byte
+	d        direction.Direction
+}
+
+// buildMigrationFiles creates MigrationFiles from tmpFiles
+func buildMigrationFiles(tmpFiles []*tmpFile, basePath string) (MigrationFiles, error) {
+
 	parsedVersions := make(map[uint64]bool)
 	newFiles := make(MigrationFiles, 0)
 	for _, file := range tmpFiles {
@@ -243,21 +349,21 @@ func ReadMigrationFiles(path string, filenameRegex *regexp.Regexp) (files Migrat
 			switch file.d {
 			case direction.Up:
 				migrationFile.UpFile = &File{
-					Path:      path,
+					Path:      basePath,
 					FileName:  file.filename,
 					Version:   file.version,
 					Name:      file.name,
-					Content:   nil,
+					Content:   file.content,
 					Direction: direction.Up,
 				}
 				lookFordirection = direction.Down
 			case direction.Down:
 				migrationFile.DownFile = &File{
-					Path:      path,
+					Path:      basePath,
 					FileName:  file.filename,
 					Version:   file.version,
 					Name:      file.name,
-					Content:   nil,
+					Content:   file.content,
 					Direction: direction.Down,
 				}
 				lookFordirection = direction.Up
@@ -270,20 +376,20 @@ func ReadMigrationFiles(path string, filenameRegex *regexp.Regexp) (files Migrat
 					switch lookFordirection {
 					case direction.Up:
 						migrationFile.UpFile = &File{
-							Path:      path,
+							Path:      basePath,
 							FileName:  file2.filename,
 							Version:   file.version,
 							Name:      file2.name,
-							Content:   nil,
+							Content:   file2.content,
 							Direction: direction.Up,
 						}
 					case direction.Down:
 						migrationFile.DownFile = &File{
-							Path:      path,
+							Path:      basePath,
 							FileName:  file2.filename,
 							Version:   file.version,
 							Name:      file2.name,
-							Content:   nil,
+							Content:   file2.content,
 							Direction: direction.Down,
 						}
 					}
