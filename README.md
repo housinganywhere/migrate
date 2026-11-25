@@ -23,7 +23,7 @@ CLI      go get -u github.com/housinganywhere/migrate
 __Features__
 
 * Super easy to implement [Driver interface](http://godoc.org/github.com/housinganywhere/migrate/driver#Driver).
-* Gracefully quit running migrations on ``^C``.
+* On ``^C`` or ``SIGTERM`` (e.g. Kubernetes stopping the pod) the running migration is cancelled on the database and rolled back (Postgres).
 * No magic search paths routines, no hard-coded config files.
 * CLI is build on top of the ``migrate package``.
 

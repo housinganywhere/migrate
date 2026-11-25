@@ -2,6 +2,7 @@
 package driver
 
 import (
+	"context"
 	"fmt"
 	neturl "net/url" // alias to allow `url string` func signature in New
 
@@ -32,6 +33,14 @@ type Driver interface {
 
 	// Version returns the current migration version.
 	Version() (uint64, error)
+}
+
+// ContextDriver is implemented by drivers that can abort a migration
+// while it is running. When ctx is cancelled the driver must stop the
+// running statement on the backend, roll back, report the error on the
+// pipe and close it.
+type ContextDriver interface {
+	MigrateContext(ctx context.Context, file file.File, pipe chan interface{})
 }
 
 // New returns Driver and calls Initialize on it

@@ -3,6 +3,8 @@
 package migrate
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -10,6 +12,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/housinganywhere/migrate/driver"
@@ -20,43 +23,10 @@ import (
 
 // Up applies all available migrations
 func Up(pipe chan interface{}, url, migrationsPath string) {
-	d, files, version, err := initDriverAndReadMigrationFilesAndGetVersion(url, migrationsPath)
-	if err != nil {
-		go pipep.Close(pipe, err)
-		return
-	}
-
-	applyMigrationFiles, err := files.ToLastFrom(version)
-	if err != nil {
-		if err2 := d.Close(); err2 != nil {
-			pipe <- err2
-		}
-		go pipep.Close(pipe, err)
-		return
-	}
-
-	signals := handleInterrupts()
-	defer signal.Stop(signals)
-
-	if len(applyMigrationFiles) > 0 {
-		for _, f := range applyMigrationFiles {
-			pipe1 := pipep.New()
-			go d.Migrate(f, pipe1)
-			if ok := pipep.WaitAndRedirect(pipe1, pipe, signals); !ok {
-				break
-			}
-		}
-		if err := d.Close(); err != nil {
-			pipe <- err
-		}
-		go pipep.Close(pipe, nil)
-		return
-	}
-	if err := d.Close(); err != nil {
-		pipe <- err
-	}
-	go pipep.Close(pipe, nil)
-	return
+	r := newRun()
+	defer r.stop()
+	r.migrate(pipe, url, migrationsPath, (*file.MigrationFiles).ToLastFrom)
+	close(pipe)
 }
 
 // UpSync is synchronous version of Up
@@ -69,43 +39,10 @@ func UpSync(url, migrationsPath string) (err []error, ok bool) {
 
 // Down rolls back all migrations
 func Down(pipe chan interface{}, url, migrationsPath string) {
-	d, files, version, err := initDriverAndReadMigrationFilesAndGetVersion(url, migrationsPath)
-	if err != nil {
-		go pipep.Close(pipe, err)
-		return
-	}
-
-	applyMigrationFiles, err := files.ToFirstFrom(version)
-	if err != nil {
-		if err2 := d.Close(); err2 != nil {
-			pipe <- err2
-		}
-		go pipep.Close(pipe, err)
-		return
-	}
-
-	signals := handleInterrupts()
-	defer signal.Stop(signals)
-
-	if len(applyMigrationFiles) > 0 {
-		for _, f := range applyMigrationFiles {
-			pipe1 := pipep.New()
-			go d.Migrate(f, pipe1)
-			if ok := pipep.WaitAndRedirect(pipe1, pipe, signals); !ok {
-				break
-			}
-		}
-		if err2 := d.Close(); err2 != nil {
-			pipe <- err2
-		}
-		go pipep.Close(pipe, nil)
-		return
-	}
-	if err2 := d.Close(); err2 != nil {
-		pipe <- err2
-	}
-	go pipep.Close(pipe, nil)
-	return
+	r := newRun()
+	defer r.stop()
+	r.migrate(pipe, url, migrationsPath, (*file.MigrationFiles).ToFirstFrom)
+	close(pipe)
 }
 
 // DownSync is synchronous version of Down
@@ -118,17 +55,12 @@ func DownSync(url, migrationsPath string) (err []error, ok bool) {
 
 // Redo rolls back the most recently applied migration, then runs it again.
 func Redo(pipe chan interface{}, url, migrationsPath string) {
-	pipe1 := pipep.New()
-	go Migrate(pipe1, url, migrationsPath, -1)
-
-	signals := handleInterrupts()
-	defer signal.Stop(signals)
-
-	if ok := pipep.WaitAndRedirect(pipe1, pipe, signals); !ok {
-		go pipep.Close(pipe, nil)
-		return
+	r := newRun()
+	defer r.stop()
+	if r.migrate(pipe, url, migrationsPath, relative(-1)) {
+		r.migrate(pipe, url, migrationsPath, relative(+1))
 	}
-	go Migrate(pipe, url, migrationsPath, +1)
+	close(pipe)
 }
 
 // RedoSync is synchronous version of Redo
@@ -141,17 +73,12 @@ func RedoSync(url, migrationsPath string) (err []error, ok bool) {
 
 // Reset runs the down and up migration function
 func Reset(pipe chan interface{}, url, migrationsPath string) {
-	pipe1 := pipep.New()
-	go Down(pipe1, url, migrationsPath)
-
-	signals := handleInterrupts()
-	defer signal.Stop(signals)
-
-	if ok := pipep.WaitAndRedirect(pipe1, pipe, signals); !ok {
-		go pipep.Close(pipe, nil)
-		return
+	r := newRun()
+	defer r.stop()
+	if r.migrate(pipe, url, migrationsPath, (*file.MigrationFiles).ToFirstFrom) {
+		r.migrate(pipe, url, migrationsPath, (*file.MigrationFiles).ToLastFrom)
 	}
-	go Up(pipe, url, migrationsPath)
+	close(pipe)
 }
 
 // ResetSync is synchronous version of Reset
@@ -164,43 +91,10 @@ func ResetSync(url, migrationsPath string) (err []error, ok bool) {
 
 // Migrate applies relative +n/-n migrations
 func Migrate(pipe chan interface{}, url, migrationsPath string, relativeN int) {
-	d, files, version, err := initDriverAndReadMigrationFilesAndGetVersion(url, migrationsPath)
-	if err != nil {
-		go pipep.Close(pipe, err)
-		return
-	}
-
-	applyMigrationFiles, err := files.From(version, relativeN)
-	if err != nil {
-		if err2 := d.Close(); err2 != nil {
-			pipe <- err2
-		}
-		go pipep.Close(pipe, err)
-		return
-	}
-
-	signals := handleInterrupts()
-	defer signal.Stop(signals)
-
-	if len(applyMigrationFiles) > 0 && relativeN != 0 {
-		for _, f := range applyMigrationFiles {
-			pipe1 := pipep.New()
-			go d.Migrate(f, pipe1)
-			if ok := pipep.WaitAndRedirect(pipe1, pipe, signals); !ok {
-				break
-			}
-		}
-		if err2 := d.Close(); err2 != nil {
-			pipe <- err2
-		}
-		go pipep.Close(pipe, nil)
-		return
-	}
-	if err2 := d.Close(); err2 != nil {
-		pipe <- err2
-	}
-	go pipep.Close(pipe, nil)
-	return
+	r := newRun()
+	defer r.stop()
+	r.migrate(pipe, url, migrationsPath, relative(relativeN))
+	close(pipe)
 }
 
 // MigrateSync is synchronous version of Migrate
@@ -311,27 +205,156 @@ func NewPipe() chan interface{} {
 // interrupt handling
 var interrupts = true
 
-// Graceful enables interrupts checking. Once the first ^C is received
-// it will finish the currently running migration and abort execution
-// of the next migration. If ^C is received twice, it will stop
-// execution immediately.
+// Graceful enables signal handling (the default). On SIGINT (^C) or
+// SIGTERM (sent by Kubernetes/Docker when stopping a container) the running
+// migration is cancelled on the database, so it is rolled back, and no
+// further migrations are run. A second signal exits immediately.
+//
+// Drivers that cannot cancel a running migration exit immediately.
 func Graceful() {
 	interrupts = true
 }
 
-// NonGraceful disables interrupts checking. The first received ^C will
-// stop execution immediately.
+// NonGraceful disables signal handling. Signals get Go's default behaviour,
+// i.e. the process is killed without cancelling the running migration.
 func NonGraceful() {
 	interrupts = false
 }
 
-// interrupts returns a signal channel if interrupts checking is
-// enabled. nil otherwise.
-func handleInterrupts() chan os.Signal {
-	if interrupts {
-		c := make(chan os.Signal, 1)
-		signal.Notify(c, os.Interrupt)
-		return c
+// errAborted is reported when a run stops early because of a signal.
+var errAborted = errors.New("aborted by signal: remaining migrations were not applied")
+
+// selectFiles picks the migration files to apply from the current version.
+type selectFiles func(files *file.MigrationFiles, version uint64) (file.Files, error)
+
+func relative(n int) selectFiles {
+	return func(files *file.MigrationFiles, version uint64) (file.Files, error) {
+		return files.From(version, n)
 	}
-	return nil
+}
+
+// run holds the signal state of one top-level operation (Up, Down, Redo,
+// ...), so signals are counted across every migration file it applies.
+type run struct {
+	signals  chan os.Signal // nil when interrupts are disabled
+	stopping bool           // a signal was received: run nothing further
+}
+
+func newRun() *run {
+	r := &run{}
+	if interrupts {
+		r.signals = make(chan os.Signal, 4)
+		signal.Notify(r.signals, os.Interrupt, syscall.SIGTERM)
+	}
+	return r
+}
+
+func (r *run) stop() {
+	if r.signals != nil {
+		signal.Stop(r.signals)
+	}
+}
+
+// handle stops the run and cancels the running migration. cancel is nil
+// when no migration is running. A second signal exits immediately.
+func (r *run) handle(sig os.Signal, cancel func(), pipe chan interface{}) {
+	if r.stopping {
+		os.Exit(5)
+	}
+	r.stopping = true
+	if cancel != nil {
+		cancel()
+		// add white space at beginning for ^C splitting
+		pipe <- fmt.Sprintf(" %s received, cancelling running migration ... Send again to force quit.", signalName(sig))
+	}
+}
+
+// poll handles signals received while no migration was running.
+func (r *run) poll(pipe chan interface{}) {
+	for {
+		select {
+		case sig := <-r.signals:
+			r.handle(sig, nil, pipe)
+		default:
+			return
+		}
+	}
+}
+
+func (r *run) migrate(pipe chan interface{}, url, migrationsPath string, sel selectFiles) (ok bool) {
+	if r.poll(pipe); r.stopping {
+		pipe <- errAborted
+		return false
+	}
+
+	d, files, version, err := initDriverAndReadMigrationFilesAndGetVersion(url, migrationsPath)
+	if err != nil {
+		pipe <- err
+		return false
+	}
+	defer func() {
+		if err := d.Close(); err != nil {
+			pipe <- err
+			ok = false
+		}
+	}()
+
+	applyMigrationFiles, err := sel(files, version)
+	if err != nil {
+		pipe <- err
+		return false
+	}
+
+	for _, f := range applyMigrationFiles {
+		if r.poll(pipe); r.stopping {
+			pipe <- errAborted
+			return false
+		}
+		if !r.apply(d, f, pipe) {
+			return false
+		}
+	}
+	return true
+}
+
+// apply runs a single migration file and redirects its output to pipe,
+// handling signals while it runs. It returns false if the migration failed.
+func (r *run) apply(d driver.Driver, f file.File, pipe chan interface{}) bool {
+	filePipe := pipep.New()
+	var cancel func()
+	if cd, ok := d.(driver.ContextDriver); ok {
+		ctx, cancelCtx := context.WithCancel(context.Background())
+		defer cancelCtx()
+		cancel = cancelCtx
+		go cd.MigrateContext(ctx, f, filePipe)
+	} else {
+		cancel = func() { os.Exit(5) }
+		go d.Migrate(f, filePipe)
+	}
+
+	failed := false
+	for {
+		select {
+		case sig := <-r.signals:
+			r.handle(sig, cancel, pipe)
+		case item, more := <-filePipe:
+			if !more {
+				return !failed
+			}
+			pipe <- item
+			if _, isErr := item.(error); isErr {
+				failed = true
+			}
+		}
+	}
+}
+
+func signalName(sig os.Signal) string {
+	switch sig {
+	case syscall.SIGTERM:
+		return "SIGTERM"
+	case os.Interrupt:
+		return "SIGINT"
+	}
+	return sig.String()
 }

@@ -2,6 +2,7 @@
 package postgres
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -62,39 +63,48 @@ func (driver *Driver) FilenameExtension() string {
 }
 
 func (driver *Driver) Migrate(f file.File, pipe chan interface{}) {
+	driver.MigrateContext(context.Background(), f, pipe)
+}
+
+func (driver *Driver) MigrateContext(ctx context.Context, f file.File, pipe chan interface{}) {
 	defer close(pipe)
 	pipe <- f
 
-	tx, err := driver.db.Begin()
+	tx, err := driver.db.BeginTx(ctx, nil)
 	if err != nil {
 		pipe <- err
 		return
 	}
 
-	if f.Direction == direction.Up {
-		if _, err := tx.Exec("INSERT INTO "+tableName+" (version) VALUES ($1)", f.Version); err != nil {
+	// database/sql already rolls the tx back by itself when ctx is
+	// cancelled, so ErrTxDone here is expected and not worth reporting.
+	rollback := func() {
+		if err := tx.Rollback(); err != nil && err != sql.ErrTxDone {
 			pipe <- err
-			if err := tx.Rollback(); err != nil {
-				pipe <- err
-			}
+		}
+	}
+
+	if f.Direction == direction.Up {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO "+tableName+" (version) VALUES ($1)", f.Version); err != nil {
+			pipe <- err
+			rollback()
 			return
 		}
 	} else if f.Direction == direction.Down {
-		if _, err := tx.Exec("DELETE FROM "+tableName+" WHERE version=$1", f.Version); err != nil {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM "+tableName+" WHERE version=$1", f.Version); err != nil {
 			pipe <- err
-			if err := tx.Rollback(); err != nil {
-				pipe <- err
-			}
+			rollback()
 			return
 		}
 	}
 
 	if err := f.ReadContent(); err != nil {
 		pipe <- err
+		rollback()
 		return
 	}
 
-	if _, err := tx.Exec(string(f.Content)); err != nil {
+	if _, err := tx.ExecContext(ctx, string(f.Content)); err != nil {
 		switch pqErr := err.(type) {
 		case *pq.Error:
 			offset, err := strconv.Atoi(pqErr.Position)
@@ -106,15 +116,11 @@ func (driver *Driver) Migrate(f file.File, pipe chan interface{}) {
 				pipe <- errors.New(fmt.Sprintf("%s %v: %s", pqErr.Severity, pqErr.Code, pqErr.Message))
 			}
 
-			if err := tx.Rollback(); err != nil {
-				pipe <- err
-			}
+			rollback()
 			return
 		default:
 			pipe <- err
-			if err := tx.Rollback(); err != nil {
-				pipe <- err
-			}
+			rollback()
 			return
 		}
 	}
